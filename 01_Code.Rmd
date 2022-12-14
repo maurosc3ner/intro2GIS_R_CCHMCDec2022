@@ -1,0 +1,285 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+library(tidyverse)
+library(foreign)
+library(lubridate)
+library(sf)
+library(patchwork)
+library(viridis)
+library(tigris)
+options(tigris_use_cache = TRUE)
+crimes<-read.csv("data/PDI__Police_Data_Initiative__Crime_Incidents.csv")
+```
+
+
+
+
+
+```{r}
+countiesOH<-counties(state = "OH") %>% 
+  dplyr::select(GEOID,NAMELSAD,ALAND)
+
+ggplot()+
+  geom_sf(data=countiesOH,aes(fill=ALAND))+
+  scale_fill_viridis(option = "C")+
+  labs(subtitle = "Counties - OH",fill="Area")+
+  theme_minimal()
+
+ggplot()+
+  geom_sf(data=countiesOH,fill=NA)+
+  # scale_fill_viridis(option = "C")+
+  labs(subtitle = "Counties - OH",fill="Area")+
+  theme_minimal()
+
+```
+
+
+```{r}
+crimes$DATE_REPORTED2<-(as.Date(crimes$DATE_REPORTED,format =  "%m/%d/%Y"))
+crimes1<-crimes%>%
+  mutate(year=year(DATE_REPORTED2))%>%
+  filter(DATE_REPORTED2>=mdy("01-01-2009"))%>%
+  drop_na(c("LONGITUDE_X", "LATITUDE_X","year"))
+
+
+coi.list<-c(
+  "39017",
+  "39165",
+  "39061",
+  "39025"
+  )
+
+tractsGC<-tracts(state = "OH",year = 2018)%>% 
+  dplyr::mutate(county=as.factor(substr(GEOID, 1, 5)))%>%
+  dplyr::filter(county %in% coi.list)
+```
+
+## From real view to ds view
+
+```{r}
+# Converting data to spatial-friendly format
+crimesRV <-
+  read.csv("data/PDI__Police_Data_Initiative__Crime_Incidents.csv")
+crimesRV1 <- crimesRV %>%
+  mutate(
+    DATE_REPORTED2 = as.Date(crimes$DATE_REPORTED, format =  "%m/%d/%Y"),
+    year = year(DATE_REPORTED2)
+  ) %>%
+  filter(DATE_REPORTED2 >= mdy("01-01-2009")) %>%
+  drop_na(c("LONGITUDE_X", "LATITUDE_X", "year")) %>%
+  dplyr::select(c(
+    "year",
+    "DATE_REPORTED2",
+    "OFFENSE",
+    "ADDRESS_X",
+    "LONGITUDE_X",
+    "LATITUDE_X"
+  ))
+
+# convert a dataset to a spatial object
+crimesDSview = crimesRV1 %>%  
+  dplyr::filter(year %in% c(2019)) %>%  # filter 2019 crimes
+  st_as_sf(coords = c("LONGITUDE_X", 
+                      "LATITUDE_X")) %>% # set coordinates 
+  st_set_crs("EPSG:4326") # set geographic CRS 
+
+
+crimesDSview
+
+```
+
+
+```{r}
+coi.list<-c(
+  "39017",
+  "39165",
+  "39061",
+  "39025"
+  )
+
+tractsGC<-tracts(state = "OH",year = 2018)%>% 
+  dplyr::mutate(county=as.factor(substr(GEOID, 1, 5)))%>%
+  dplyr::filter(county %in% coi.list)
+
+ggplot ()+
+  geom_sf(data=tractsGC,fill=NA,size=0.1)+
+  geom_sf(data=crimesDSview,size=0.01)+
+  labs(subtitle = "Crimes - Greater Cincinnati Area")+
+  theme_minimal()
+```
+
+# Geometry operations
+
+## Simplification
+
+```{r}
+tractsGC_simpl<- st_simplify(tractsGC, dTolerance = 1000)  # 1000 m
+object.size(tractsGC)
+object.size(tractsGC_simpl)
+```
+
+
+```{r}
+simpl1<-ggplot ()+
+  geom_sf(data=tractsGC,fill=NA,size=0.1)+
+  labs(subtitle = "Original data")+
+  theme_minimal()
+simpl2<-ggplot()+
+  geom_sf(data=tractsGC_simpl,fill=NA,size=0.1)+
+  labs(subtitle = "st_simplify")+
+  theme_minimal()
+
+simpl1+simpl2
+```
+
+## Centroids
+
+```{r}
+countiesOH2 <- cbind(countiesOH, st_coordinates(st_centroid(countiesOH)))
+centroids <- st_centroid(countiesOH)
+
+ggplot()+
+  geom_sf(data=countiesOH2,fill=NA)+
+  geom_sf(data=centroids, color="red")+ #centroid at each county
+  geom_sf_text(data=countiesOH2,aes(label=GEOID),size=3)+ # label for each polygon
+  labs(subtitle = "Counties - OH",fill="Area")+
+  theme_minimal()
+```
+
+## Spatial Join
+
+```{r}
+#Filter hamilton tracts
+tractsHamilton<-tractsGC %>% 
+  dplyr::filter(grepl("39061",GEOID))
+
+ggplot ()+
+  geom_sf(data=tractsHamilton,fill=NA,size=0.1)+
+  labs(subtitle = "Original data")+
+  theme_minimal()
+
+#Set same coordinate system
+st_crs(tractsHamilton)<-st_crs(crimesDSview)
+crimesDSview
+tractsHamilton
+#Spatial Join
+crimesHamilton<-st_join(crimesDSview,tractsHamilton) %>% 
+  filter(!is.na(GEOID))
+
+ggplot ()+
+  geom_sf(data=tractsHamilton,fill=NA,size=0.1)+
+  geom_sf(data=crimesHamilton,size=0.01)+
+  labs(subtitle = "Crimes in Hamilton County, OH")+
+  theme_minimal()
+```
+
+## Reprojecting maps
+
+```{r}
+
+# reproject 
+tractsHamiltonWintri = st_transform(tractsHamilton, 
+                                    crs = "+proj=wintri")
+
+
+tractsHamiltonWintri
+
+
+a<-ggplot() +
+  geom_sf(data=tractsHamilton,fill=NA,size=0.1,color="red")+
+  labs(subtitle = "EPSG:4326 (WGS84)")+
+  theme_minimal()
+
+b<-ggplot() +  
+  geom_sf(data=tractsHamiltonWintri,fill=NA,size=0.1,color="blue")+
+  labs(subtitle = "Winkel tripel")+
+  theme_minimal()
+a/b
+
+
+```
+
+
+# Disease mapping example
+
+```{r}
+library(spdep)
+
+library(SpatialEpi)
+
+pennLC
+map <- pennLC$spatial.polygon # GIS view
+plot(map)
+
+nb <- poly2nb(map)
+head(nb)
+```
+
+
+```{r}
+# Summarize by each county
+d <- group_by(pennLC$data, county) %>% 
+  summarize(Y = sum(cases))
+d
+# We order by each strata to hold original 
+# population distribution
+pennLC$data <- pennLC$data[order(
+  pennLC$data$county,
+  pennLC$data$race,
+  pennLC$data$gender,
+  pennLC$data$age
+), ]
+
+# Estimate the expected cases based on population distribution
+E <- expected(
+  population = pennLC$data$population,
+  cases = pennLC$data$cases, n.strata = 16
+)
+
+
+d$E <- E[match(d$county, unique(pennLC$data$county))]
+head(d)
+d$SIR <- d$Y / d$E
+
+mapDS <- st_as_sf(map)
+mapDS$county=names(map)
+mapDS2<-mapDS %>% 
+  left_join(d,by="county")
+mapDS2
+highSIR<-mapDS2 %>% 
+  filter(SIR>1.1)
+```
+
+
+
+```{r}
+highSIR2 <- cbind(highSIR, 
+                  st_coordinates(st_centroid(highSIR)))
+
+ggplot()+
+  geom_sf(data=mapDS2,aes(fill = SIR))+
+  scale_fill_gradient2(
+    midpoint = 1,
+    low = "blue",
+    mid = "white",
+    high = "red"
+  ) +
+  coord_sf(crs="EPSG:4326")+
+  geom_sf_text(data=highSIR,
+               aes(label=county),
+               size=3)+ # label for each polygon
+  labs(subtitle="SIR of lung cancer in Pennsylvania counties")+
+  theme_minimal()
+```
+
+```{r}
+
+```
+
